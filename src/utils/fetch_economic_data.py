@@ -1,4 +1,5 @@
 import pandas as pd
+import yfinance as yf
 from fredapi import Fred
 from settings import FRED_API_KEY
 
@@ -60,3 +61,36 @@ def fetch_usd_to_gbp(fred_client) -> pd.Series:
 def fetch_usd_to_cny(fred_client) -> pd.Series:
     """USD to Chinese Yuan exchange rate (DEXCHUS)."""
     return fetch_series(fred_client, 'DEXCHUS')
+
+
+def fetch_full_sp500_history() -> pd.Series:
+    sp500 = yf.download("^GSPC", start="1950-01-01", interval="1d")
+    # Flatten MultiIndex columns
+    sp500.columns = sp500.columns.get_level_values(0)
+    sp500_series = sp500["Close"]
+    sp500_series.name = "value"
+    return sp500_series
+
+
+def fetch_unemployment_rate(fred: Fred) -> pd.Series:
+    return fred.get_series("UNRATE")  # Monthly unemployment rate
+
+
+def fetch_consumer_sentiment(fred: Fred) -> pd.Series:
+    return fred.get_series("UMCSENT")  # University of Michigan consumer sentiment index
+
+
+def fetch_fed_funds_rate(fred: Fred) -> pd.Series:
+    return fred.get_series("FEDFUNDS")
+
+
+def fetch_10y_treasury_yield(fred: Fred) -> pd.Series:
+    return fred.get_series("GS10")
+
+
+def fetch_3m_treasury_yield(fred: Fred) -> pd.Series:
+    return fred.get_series("GS3M")
+
+
+def compute_yield_spread(gs10: pd.Series, gs3m: pd.Series) -> pd.Series:
+    return gs10 - gs3m

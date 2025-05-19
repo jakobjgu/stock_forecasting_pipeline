@@ -3,11 +3,31 @@ from typing import Dict
 from settings import ROOT_PATH
 from pathlib import Path
 
-def load_series_from_csv(filename: str, folder: Path = ROOT_PATH / "data" / "raw") -> pd.Series:
+
+def save_series_to_csv(
+        series: pd.Series,
+        filename: str,
+        root_folder: Path = ROOT_PATH / "data",
+        destination_folder = "processed"
+        ):
+    folder = root_folder / destination_folder
+    folder.mkdir(parents=True, exist_ok=True)
+    filepath = folder / filename
+    df = series.to_frame(name="value")
+    df.to_csv(filepath, index_label="date")
+    print(f"Saved to: {filepath}")
+
+
+def load_series_from_csv(
+        filename: str,
+        root_folder: Path = ROOT_PATH / "data",
+        origin_folder = "processed"
+        ) -> pd.Series:
     """
     Load a time series CSV from a consistent project-root-relative location.
     """
-    filepath = folder / filename
+    filepath = root_folder / origin_folder / filename
+    print(filepath)
     if not filepath.exists():
         raise FileNotFoundError(f"File not found: {filepath}")
     
@@ -17,7 +37,7 @@ def load_series_from_csv(filename: str, folder: Path = ROOT_PATH / "data" / "raw
 
 def preprocess_series(
     series: pd.Series,
-    freq: str = "B",        # business daily frequency
+    freq: str = "MS",        # business daily frequency
     method: str = "ffill",  # 'ffill', 'bfill', 'interpolate'
 ) -> pd.Series:
     """
@@ -38,7 +58,6 @@ def preprocess_series(
         raise ValueError(f"Unknown fill method: {method}")
 
     return series
-
 
 
 def add_pct_change(series: pd.Series, periods: int = 1) -> pd.Series:

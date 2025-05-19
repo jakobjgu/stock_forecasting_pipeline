@@ -1,29 +1,54 @@
-from src.utils.preprocess import load_series_from_csv
-from src.models.prophet_model import forecast_series
-from src.models.sp500_forecast_with_regressors import forecast_sp500_with_regressors
+from src.pipeline.ingest_economic_data import fetch_economic_data_series
+from src.pipeline.forecast_regressors import forecast_all_regressors
+from src.pipeline.forecast_target import run_backtests
 from pathlib import Path
+import sys
 
 
-def main():
-    print("\n🔄 Step 1: Forecast CPI and USD/EUR...")
-    cpi = load_series_from_csv("cpi.csv")
-    usd_eur = load_series_from_csv("usd_eur.csv")
+def main(fetch=False):
+    # 🔧 Global Configuration
+    FREQ = "MS"
+    FORECAST_HORIZON = 120  # number of periods of the main FREQ. For MS, the 120 equates to a 10 year forecasting horizon
+    TARGET_SERIES = {"name": "nasdaq", "label": "NASDAQ Index"}
+    REGRESSORS = [
+        {"name": "cpi", "label": "CPI"},
+        {"name": "unrate", "label": "Unemployment Rate"},
+        {"name": "umcsent", "label": "Consumer Sentiment"},
+        {"name": "treasury_3m", "label": "3M Treasury"},
+        {"name": "treasury_10y", "label": "10Y Treasury"},
+        {"name": "yield_spread", "label": "Yield Spread"},
+    ]
+    CUTOFFS = ["2000-01-01", "2010-01-01", "2020-01-01"]
+    OUT_DIR = Path("outputs/forecasts")
+    OUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    cpi_forecast = forecast_series(cpi, periods=24, freq="MS", name="CPI")
-    usd_forecast = forecast_series(usd_eur, periods=90, freq="B", name="USD_EUR")
+    if fetch:
+        print("\n🔄 Fetching latest economic data...")
+        fetch_economic_data_series()
+    else:
+        print("\n⏩ Skipping data fetch. Using existing local files.")
 
-    print("\n📈 Step 2: Forecast SP500 using CPI and USD_EUR as regressors...")
-    sp500 = load_series_from_csv("sp500.csv")
-    sp500_forecast = forecast_sp500_with_regressors(sp500, cpi_forecast, usd_forecast, periods=90)
+    # 🔄 Step 2: Forecast regressors
+    print("\n📈 Forecasting regressors...")
+    actuals, forecasts = forecast_all_regressors(REGRESSORS, freq=FREQ, horizon=FORECAST_HORIZON, out_dir=OUT_DIR)
 
-    # Save outputs
-    out_dir = Path("outputs/data/forecasts")
-    out_dir.mkdir(parents=True, exist_ok=True)
-    cpi_forecast.to_csv(out_dir / "cpi_forecast.csv", index=False)
-    usd_forecast.to_csv(out_dir / "usd_eur_forecast.csv", index=False)
-    sp500_forecast.to_csv(out_dir / "sp500_forecast_with_regressors.csv", index=False)
-    print("\n✅ All forecasts saved to outputs/data/forecasts/")
+    # 🔄 Step 3–5: Run backtests for the target series
+    print(f"\n📊 Running backtests for target: {TARGET_SERIES['label']}")
+    run_backtests(
+        target_series=TARGET_SERIES,
+        actuals=actuals,
+        forecasts=forecasts,
+        freq=FREQ,
+        cutoffs=CUTOFFS,
+        out_dir=OUT_DIR,
+    )
 
 
 if __name__ == "__main__":
-    main()
+    arg = sys.argv[1].lower() if len(sys.argv) > 1 else "false"
+    if arg in {"true", "t", "1"}:
+        main(fetch=True)
+    elif arg in {"false", "f", "0"}:
+        main(fetch=False)
+    else:
+        print('⚠️ Invalid input. Use "true" or "false" to indicate whether to fetch fresh FRED data.')

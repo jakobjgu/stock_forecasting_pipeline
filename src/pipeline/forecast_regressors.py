@@ -1,27 +1,34 @@
+from src.utils.preprocess import load_series_from_csv, save_series_to_csv
+from src.utils.prophet_helpers import forecast_series
 from pathlib import Path
-from src.utils.preprocess import load_series_from_csv
-from src.models.prophet_model import forecast_series
 
-
-def forecast_and_save_series(name: str, filename: str, periods: int, freq: str):
+def forecast_all_regressors(regressors: list[dict], freq: str, horizon: int, out_dir: Path) -> tuple[dict, dict]:
     """
-    Load, forecast, and save the forecast of a univariate series.
+    Load, preprocess, and forecast all regressors defined in the pipeline config.
+
+    Parameters:
+    - regressors: List of dicts with 'name' and 'label' for each regressor
+    - freq: Resampling frequency (e.g. 'MS')
+    - horizon: Number of periods to forecast
+    - out_dir: Folder to save forecast CSVs
+
+    Returns:
+    - actuals: Dict of cleaned input Series
+    - forecasts: Dict of forecast DataFrames
     """
-    series = load_series_from_csv(filename)
-    forecast = forecast_series(series, periods=periods, freq=freq, name=name)
+    actuals, forecasts = {}, {}
 
-    output_path = Path("outputs/data/forecasts")
-    output_path.mkdir(parents=True, exist_ok=True)
+    for reg in regressors:
+        name = reg["name"]
+        label = reg["label"]
+        print(f"⏳ Processing regressor: {label}...")
 
-    out_file = output_path / f"{name.lower()}_forecast.csv"
-    forecast.to_csv(out_file, index=False)
-    print(f"Saved forecast for {name} to {out_file}")
+        series = load_series_from_csv(f"{name}.csv", origin_folder="raw").resample(freq).ffill().bfill()
+        save_series_to_csv(series, f"{name}_resampled.csv", destination_folder="processed")
+        actuals[name] = series
 
+        forecast = forecast_series(series, periods=horizon, freq=freq, name=label)
+        forecast.to_csv(out_dir / f"{name}_forecast.csv", index=False)
+        forecasts[name] = forecast
 
-def main():
-    forecast_and_save_series("CPI", "cpi.csv", periods=24, freq="MS")
-    forecast_and_save_series("USD_EUR", "usd_eur.csv", periods=90, freq="B")
-
-
-if __name__ == "__main__":
-    main()
+    return actuals, forecasts
