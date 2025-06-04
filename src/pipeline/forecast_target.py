@@ -1,93 +1,89 @@
 import pandas as pd
 from pathlib import Path
-from src.utils.preprocess import load_series_from_csv, save_series_to_csv
 from src.utils.evaluation import evaluate_and_save_forecast
-from src.models.target_forecast_with_regressors import forecast_target_with_regressors
-from src.models.target_forecast import forecast_target
+from src.models.forecaster_definitions import ProphetForecaster
 
-def run_backtests(
-    target_series: dict,
-    actuals: dict,
-    forecasts: dict,
+
+def run_cutoff_backtests(
+    target_series_info: dict,
+    target_trimmed: pd.Series,
+    actuals_trimmed: dict[str, pd.Series],
+    forecasts: dict[str, pd.DataFrame],
     freq: str,
     cutoffs: list[str],
-    out_dir: Path
-):
+    out_dir: Path,
+    forecaster,
+) -> None:
     """
-    Run forecasts (with and without regressors) for a given target series across cutoff dates.
+    Run backtests across multiple cutoff dates using a trained forecasting model.
 
     Parameters:
-    - target_series: dict with keys 'name' and 'label'
-    - actuals: dict of cleaned Series
-    - forecasts: dict of forecasted DataFrames
-    - freq: Resample frequency
-    - cutoffs: list of date strings
-    - out_dir: path for saving outputs
+    - target_series_info: dict with keys 'name' and 'label'
+    - target_trimmed: pd.Series, trimmed target series
+    - actuals_trimmed: dict of trimmed actual regressor series
+    - forecasts: dict of forecasted regressor DataFrames
+    - freq: time frequency (e.g., 'MS')
+    - cutoffs: list of cutoff date strings
+    - out_dir: output directory path
+    - forecaster: a model instance supporting .fit(), .predict(), and .reset()
     """
-    print(f"\n📈 Loading and preprocessing target: {target_series['label']}")
-    target = load_series_from_csv(f"{target_series['name']}.csv", origin_folder="raw").resample(freq).ffill().bfill()
-    save_series_to_csv(target, f"{target_series['name']}_resampled.csv", destination_folder="processed")
-
-    print("\n🧹 Trimming to common timeframe...")
-    all_series = list(actuals.values()) + [target]
-    min_common = max(s.index.min() for s in all_series)
-    max_common = min(s.index.max() for s in all_series)
-
-    trimmed = {
-        name: s[(s.index >= min_common) & (s.index <= max_common)]
-        for name, s in actuals.items()
-    }
-    target_trim = target[(target.index >= min_common) & (target.index <= max_common)]
-
-    for name, series in trimmed.items():
-        save_series_to_csv(series, f"{name}_trimmed.csv", destination_folder="processed")
-    save_series_to_csv(target_trim, f"{target_series['name']}_trimmed.csv", destination_folder="processed")
-
-    print("\n🔁 Running backtests...")
     metrics_log = []
+
+    print("📅 Final trimmed range:")
+    print("Target:", target_trimmed.index.min(), "→", target_trimmed.index.max())
+    for k, v in actuals_trimmed.items():
+        print(f"{k}: {v.index.min()} → {v.index.max()}")
 
     for cutoff_str in cutoffs:
         cutoff = pd.to_datetime(cutoff_str)
-        print(f"🔸 Cutoff: {cutoff.date()}")
+        print(f"\n🔸 Cutoff: {cutoff.date()}")
 
-        target_train = target_trim[target_trim.index <= cutoff]
+        target_train = target_trimmed[target_trimmed.index <= cutoff]
+        if target_train.empty:
+            print(f"⚠️ Skipping cutoff {cutoff.date()} — no data in target series before this date.")
+            continue
+
         n_periods = (2030 - cutoff.year) * 12 + (1 - cutoff.month)
 
-        forecast_with = forecast_target_with_regressors(
-            target=target_train,
-            actual_regressors=trimmed,
-            forecast_regressors=forecasts,
-            periods=n_periods,
-            freq=freq
-        )
+        forecaster.reset()
+        forecaster.fit(target=target_train, actual_regressors=actuals_trimmed)
+        forecast_with = forecaster.predict(periods=n_periods, forecast_regressors=forecasts)
 
-        forecast_base = forecast_target(
-            target=target_train,
-            periods=n_periods,
-            freq=freq
-        )
+        model_name = forecaster.name.lower().replace(" ", "_")
+        label = f"{target_series_info['name']} ({model_name} with regressors)"
+        save_name = f"{target_series_info['name']}_{model_name}_forecast_cutoff_{cutoff.year}"
 
         metrics_with = evaluate_and_save_forecast(
             forecast_df=forecast_with,
-            actual_series=target_trim,
+            actual_series=target_trimmed,
             cutoff=cutoff,
-            forecast_label=f"{target_series['name']} (with regressors)",
-            save_name=f"{target_series['name']}_forecast_cutoff_{cutoff.year}",
-            output_dir=out_dir
+            forecast_label=label,
+            save_name=save_name,
+            output_dir=out_dir,
         )
-        metrics_base = evaluate_and_save_forecast(
-            forecast_df=forecast_base,
-            actual_series=target_trim,
-            cutoff=cutoff,
-            forecast_label=f"{target_series['name']} (baseline)",
-            save_name=f"{target_series['name']}_baseline_cutoff_{cutoff.year}",
-            output_dir=out_dir
-        )
+        metrics_with["model"] = f"{model_name}_with_regressors"
+        metrics_log.append(metrics_with)
 
-        metrics_with["model"] = "with_regressors"
-        metrics_base["model"] = "baseline"
-        metrics_log += [metrics_with, metrics_base]
+        if forecaster.__class__.__name__.lower().startswith("prophet"):
+            baseline_forecaster = ProphetForecaster(
+                target=target_series_info["name"],
+                use_regressors=False,
+                freq=freq
+            )
+            baseline_forecaster.fit(target=target_train)
+            forecast_base = baseline_forecaster.predict(periods=n_periods)
+
+            metrics_base = evaluate_and_save_forecast(
+                forecast_df=forecast_base,
+                actual_series=target_trimmed,
+                cutoff=cutoff,
+                forecast_label=f"{target_series_info['name']} ({model_name} baseline)",
+                save_name=f"{target_series_info['name']}_{model_name}_baseline_cutoff_{cutoff.year}",
+                output_dir=out_dir,
+            )
+            metrics_base["model"] = f"{model_name}_baseline"
+            metrics_log.append(metrics_base)
 
     metrics_df = pd.DataFrame(metrics_log)
-    metrics_df.to_csv(out_dir / f"{target_series['name']}_backtest_metrics.csv", index=False)
-    print(f"\n📊 Saved metrics to outputs/data/forecasts/{target_series['name']}_backtest_metrics.csv")
+
+    return metrics_df

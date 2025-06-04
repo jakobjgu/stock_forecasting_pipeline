@@ -60,50 +60,6 @@ def preprocess_series(
     return series
 
 
-def load_and_trim_target_series(
-    target_info: dict,
-    actuals: Dict[str, pd.Series],
-    freq: str,
-    save_processed: bool = True,
-) -> tuple[pd.Series, dict]:
-    """
-    Load, resample, and align a target series with actual regressors.
-
-    Parameters:
-    - target_info: dict with keys 'name' and 'label'
-    - actuals: dict of regressor Series to align to
-    - freq: resample frequency (e.g., 'MS')
-    - save_processed: whether to save the resampled/trimmed series to disk
-
-    Returns:
-    - trimmed_target: pd.Series
-    - trimmed_regressors: dict[str, pd.Series]
-    """
-    target = load_series_from_csv(f"{target_info['name']}.csv", origin_folder="raw")
-    target = preprocess_series(target, freq=freq)
-
-    if save_processed:
-        save_series_to_csv(target, f"{target_info['name']}_resampled.csv", destination_folder="processed")
-
-    # Align start/end dates across all series
-    all_series = list(actuals.values()) + [target]
-    min_common = max(s.index.min() for s in all_series)
-    max_common = min(s.index.max() for s in all_series)
-
-    trimmed_target = target[(target.index >= min_common) & (target.index <= max_common)]
-    trimmed_actuals = {
-        name: s[(s.index >= min_common) & (s.index <= max_common)]
-        for name, s in actuals.items()
-    }
-
-    if save_processed:
-        save_series_to_csv(trimmed_target, f"{target_info['name']}_trimmed.csv", destination_folder="processed")
-        for name, series in trimmed_actuals.items():
-            save_series_to_csv(series, f"{name}_trimmed.csv", destination_folder="processed")
-
-    return trimmed_target, trimmed_actuals
-
-
 def add_pct_change(series: pd.Series, periods: int = 1) -> pd.Series:
     """Add percent change over the specified lag."""
     return series.pct_change(periods=periods)
