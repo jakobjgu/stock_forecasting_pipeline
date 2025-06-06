@@ -2,6 +2,7 @@ import pandas as pd
 from src.utils.preprocess import save_series_to_csv
 from prophet import Prophet
 
+
 def prepare_prophet_input(series: pd.Series) -> pd.DataFrame:
     """
     Convert a time-indexed pd.Series into Prophet's expected format.
@@ -9,8 +10,6 @@ def prepare_prophet_input(series: pd.Series) -> pd.DataFrame:
     df = series.reset_index()
     df.columns = ["ds", "y"]
     return df
-
-import pandas as pd
 
 
 def align_forecast_regressor(
@@ -31,42 +30,54 @@ def align_forecast_regressor(
     Returns:
     - A Series aligned to future_ds with forward-filled values
     """
+    # Validate input
+    if "ds" not in forecast_df.columns:
+        raise ValueError("forecast_df must contain a 'ds' column")
     if column not in forecast_df.columns:
-        raise ValueError(f"Expected column '{column}' not found in forecast_df. Columns: {forecast_df.columns.tolist()}")
+        raise ValueError(f"Expected column '{column}' not found in forecast_df. Available columns: {forecast_df.columns.tolist()}")
 
-    future_index = pd.DatetimeIndex(future_ds).normalize()
+    # # Inspect types for debugging
+    # print(f"\n🔍 Aligning regressor '{column}'")
+    # print("forecast_df['ds'] dtype:", forecast_df["ds"].dtype)
+    # print("future_ds dtype:", future_ds.dtype)
+
+    # Normalize dates
     forecast_df["ds"] = pd.to_datetime(forecast_df["ds"]).dt.normalize()
+    future_index = pd.to_datetime(future_ds).dt.normalize()
+
+    # Forward-fill values
     forecast_df[column] = forecast_df[column].ffill()
-
     forecast_df = forecast_df.dropna(subset=[column])
-    forecast_daily = (
-        forecast_df.set_index("ds")[column]
-        .resample(freq)
-        .ffill()
-    )
-    forecast_daily.name = column  # restore name so it's accessible in later steps
-    forecast_daily = forecast_daily.dropna()
 
-    # Prepare aligned forecast regressor and export for inspection
-    aligned = forecast_daily.reindex(future_index).ffill()
-    save_series_to_csv(aligned, "aligned_regressor.csv", destination_folder='temp')
+    # Resample to monthly frequency
+    forecast_series = forecast_df.set_index("ds")[column].resample(freq).ffill()
+    forecast_series.name = column
+    forecast_series = forecast_series.dropna()
+
+    # Align with future index
+    aligned = forecast_series.reindex(future_index).ffill()
+
+    # Debug output
+    # print("🔢 Aligned series preview:")
+    # print(aligned.head())
+    # print(f"🕒 forecast_series index head: {forecast_series.index[:3]}")
+    # print(f"🕒 future_index head: {future_index[:3]}")
 
     if aligned.isna().any():
-        print("⚠️ Debugging alignment failure:")
-        print("Forecast index head:", forecast_daily.index[:5])
-        print("Future index head:", future_index[:5])
-        print("Missing values after alignment:", aligned.isna().sum())
-        raise ValueError(f"NaNs remain in regressor '{column}' after resample + alignment.")
+        print("⚠️ Missing values found in aligned series:")
+        print(aligned[aligned.isna()])
+        raise ValueError(f"NaNs remain in regressor '{column}' after alignment")
 
+    # Save for inspection
+    save_series_to_csv(aligned, "aligned_regressor.csv", destination_folder="temp")
     return aligned
 
 
-def series_to_prophet_df(series: pd.Series, name="y") -> pd.DataFrame:
+def series_to_prophet_df(series: pd.Series) -> pd.DataFrame:
     df = series.copy()
-    df.name = name
-    df = df.reset_index()
-    df.columns = ["ds", name]
-    return df
+    series.index = pd.to_datetime(series.index).to_period("M").to_timestamp(how="start")
+    # df.index = pd.to_datetime(df.index)  # ← force uniform datetime format
+    return pd.DataFrame({"ds": df.index, "y": df.values})
 
 
 def forecast_series(
